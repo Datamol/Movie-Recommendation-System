@@ -1,0 +1,243 @@
+## Evaluating the Recommender Systems
+
+There are a few options to choose from when deciding to create a recommendation engine. In order to compare their performances and choose the most appropriate model, I follow these steps:
+
+- Prepare the data to evaluate performance
+- Evaluate the performance of some models
+- Choose the best performing models
+- Optimize model parameters
+
+# Preparing the data to evaluate models
+
+We need two trainig and testing data to evaluate the model. There are several methods to create them: 1) splitting the data into training and test sets, 2) bootstrapping, 3) using k-fold.
+
+### Splitting the data
+
+Splitting the data into training and test sets is often done using a 80/20 proportion.
+```{r}
+percentage_training <- 0.8
+
+```
+
+# For each user in the test set, we need to define how many items to use to generate recommendations. For this, I first check the minimum number of items rated by users to be sure there will be no users with no items to test.
+
+```{r}
+min(rowCounts(ratings_movies)) 
+items_to_keep <- 5 #number of items to generate recommendations
+rating_threshold <- 3 # threshold with the minimum rating that is considered good
+n_eval <- 1 #number of times to run evaluation
+
+eval_sets <- evaluationScheme(data = ratings_movies, 
+                              method = "split",
+                              train = percentage_training, 
+                              given = items_to_keep, 
+                              goodRating = rating_threshold, 
+                              k = n_eval) 
+eval_sets
+
+getData(eval_sets, "train") # training set
+getData(eval_sets, "known") # set with the items used to build the recommendations
+getData(eval_sets, "unknown") # set with the items used to test the recommendations
+
+qplot(rowCounts(getData(eval_sets, "unknown"))) + 
+  geom_histogram(binwidth = 10) + 
+  ggtitle("unknown items by the users")
+```
+
+### Bootstrapping the data
+Bootrstrapping is another approach to split the data. The same user can be sampled more than once and, if the training set has the same size as it did earlier, there will be more users in the test set.
+```{r}
+eval_sets <- evaluationScheme(data = ratings_movies, 
+                              method = "bootstrap", 
+                              train = percentage_training, 
+                              given = items_to_keep,
+                              goodRating = rating_threshold, 
+                              k = n_eval)
+
+table_train <- table(eval_sets@runsTrain[[1]])
+n_repetitions <- factor(as.vector(table_train))
+qplot(n_repetitions) + 
+  ggtitle("Number of repetitions in the training set")
+```
+
+### Using cross-validation to validate models
+
+The k-fold cross-validation approach is the most accurate one, although it's computationally heavier.
+
+Using this approach, we split the data into some chunks, take a chunk out as the test set, and evaluate the accuracy. Then, we can do the same with each other chunk and compute the average accuracy.
+
+```{r}
+n_fold <- 4
+eval_sets <- evaluationScheme(data = ratings_movies, 
+                              method = "cross-validation",
+                              k = n_fold, 
+                              given = items_to_keep, 
+                              goodRating = rating_threshold)
+size_sets <- sapply(eval_sets@runsTrain, length)
+size_sets
+```
+
+## Evaluating the ratings
+
+I use the k-fold approach for evaluation.
+
+First, I re-define the evaluation sets, build IBCF model and create a matrix with predicted ratings.
+```{r}
+eval_sets <- evaluationScheme(data = ratings_movies, 
+                              method = "cross-validation",
+                              k = n_fold, 
+                              given = items_to_keep, 
+                              goodRating = rating_threshold)
+
+model_to_evaluate <- "IBCF"
+model_parameters <- NULL
+
+eval_recommender <- Recommender(data = getData(eval_sets, "train"),
+                                method = model_to_evaluate, 
+                                parameter = model_parameters)
+
+items_to_recommend <- 10
+eval_prediction <- predict(object = eval_recommender, 
+                           newdata = getData(eval_sets, "known"), 
+                           n = items_to_recommend, 
+                           type = "ratings")
+
+qplot(rowCounts(eval_prediction)) + 
+  geom_histogram(binwidth = 10) +
+  ggtitle("Distribution of movies per user")
+```
+
+Now, I compute the accuracy measures for each user. Most of the RMSEs (Root mean square errors) are in the range of 0.5 to 1.8:
+```{r}
+eval_accuracy <- calcPredictionAccuracy(x = eval_prediction, 
+                                        data = getData(eval_sets, "unknown"), 
+                                        byUser = TRUE)
+head(eval_accuracy)
+
+qplot(eval_accuracy[, "RMSE"]) + 
+  geom_histogram(binwidth = 0.1) +
+  ggtitle("Distribution of the RMSE by user")
+```
+
+In order to have a performance index for the whole model, I specify byUser as FALSE and compute the average indices:
+```{r}
+eval_accuracy <- calcPredictionAccuracy(x = eval_prediction, 
+                                        data = getData(eval_sets, "unknown"), 
+                                        byUser = FALSE) 
+eval_accuracy
+```
+
+
+# Evaluating the recommendations
+
+Another way to measure accuracies is by comparing the recommendations with the purchases having a positive rating. For this, I can make use of a prebuilt evaluate function in recommenderlab library. The function evaluate the recommender performance depending on the number n of items to recommend to each user. I use n as a sequence n = seq(10, 100, 10). The first rows of the resulting performance matrix is presented below:
+
+```{r}
+results <- evaluate(x = eval_sets, 
+                    method = model_to_evaluate, 
+                    n = seq(10, 100, 10))
+
+head(getConfusionMatrix(results)[[1]])
+```
+In order to have a look at all the splits at the same time, I sum up the indices of columns TP, FP, FN and TN:
+```{r}
+columns_to_sum <- c("TP", "FP", "FN", "TN")
+indices_summed <- Reduce("+", getConfusionMatrix(results))[, columns_to_sum]
+head(indices_summed)
+```
+Finally, I plot the ROC and the precision/recall curves:
+```{r}
+plot(results, annotate = TRUE, main = "ROC curve")
+
+plot(results, "prec/rec", annotate = TRUE, main = "Precision-recall")
+```
+
+If a small percentage of rated movies is recommended, the precision decreases. On the other hand, the higher percentage of rated movies is recommended the higher is the recall.
+
+
+# Comparing models
+
+In order to compare different models, I define them as a following list:
+
+- Item-based collaborative filtering, using the Cosine as the distance function
+- Item-based collaborative filtering, using the Pearson correlation as the distance function
+- User-based collaborative filtering, using the Cosine as the distance function
+- User-based collaborative filtering, using the Pearson correlation as the distance function
+- Random recommendations to have a base line
+
+```{r}
+models_to_evaluate <- list(
+IBCF_cos = list(name = "IBCF", 
+                param = list(method = "cosine")),
+IBCF_cor = list(name = "IBCF", 
+                param = list(method = "pearson")),
+UBCF_cos = list(name = "UBCF", 
+                param = list(method = "cosine")),
+UBCF_cor = list(name = "UBCF", 
+                param = list(method = "pearson")),
+random = list(name = "RANDOM", param=NULL)
+)
+```
+
+Then, I define a different set of numbers for recommended movies (n_recommendations <- c(1, 5, seq(10, 100, 10))), run and evaluate the models:
+```{r}
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+list_results <- evaluate(x = eval_sets, 
+                         method = models_to_evaluate, 
+                         n = n_recommendations)
+
+sapply(list_results, class) == "evaluationResults"
+```
+
+The following table presents as an example the first rows of the performance evaluation matrix for the IBCF with Cosine distance:
+
+```{r}
+avg_matrices <- lapply(list_results, avg)
+head(avg_matrices$IBCF_cos[, 5:8])
+```
+
+# Identifying the most suitable model
+
+I compare the models by building a chart displaying their ROC curves and Precision/recall curves.
+```{r}
+plot(list_results, annotate = 1, legend = "topleft") 
+title("ROC curve")
+
+plot(list_results, "prec/rec", annotate = 1, legend = "bottomright")
+title("Precision-recall")
+```
+
+A good performance index is the area under the curve (AUC), that is, the area under the ROC curve. Even without computing it, the chart shows that the highest is UBCF with cosine distance, so it's the best-performing technique.
+
+The UBCF with cosine distance is still the top model. Depending on what is the main purpose of the system, an appropriate number of items to recommend should be defined.
+
+
+# Optimizing a numeric parameter
+
+IBCF takes account of the k-closest items. I will explore more values, ranging between 5 and 40, in order to tune this parameter:
+```{r}
+vector_k <- c(5, 10, 20, 30, 40)
+models_to_evaluate <- lapply(vector_k, function(k){
+  list(name = "IBCF",
+       param = list(method = "cosine", k = k))
+})
+names(models_to_evaluate) <- paste0("IBCF_k_", vector_k)
+```
+
+Now I build and evaluate the same IBCF/cosine models with different values of the k-closest items:
+```{r}
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+list_results <- evaluate(x = eval_sets, 
+                         method = models_to_evaluate, 
+                         n = n_recommendations)
+
+plot(list_results, annotate = 1, legend = "topleft") 
+title("ROC curve")
+
+plot(list_results, "prec/rec", annotate = 1, legend = "bottomright")
+title("Precision-recall")
+```
+
+Based on the ROC curve's plot, the k having the biggest AUC is 10. Another good candidate is 5, but it can never have a high TPR. This means that, even if we set a very high n value, the algorithm won't be able to recommend a big percentage of items that the user liked. The IBCF with k = 5 recommends only a few items similar to the purchases. Therefore, it can't be used to recommend many items.
+
+Based on the precision/recall plot, k should be set to 10 to achieve the highest recall. If we are more interested in the precision, we set k to 5.
