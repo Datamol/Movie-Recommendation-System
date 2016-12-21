@@ -1,0 +1,72 @@
+## USER-based Collaborative Filtering Model
+Now, I will use the user-based approach. According to this approach, given a new user, its similar users are first identified. Then, the top-rated items rated by similar users are recommended.
+
+For each new user, these are the steps:
+
+1. Measure how similar each user is to the new one. Like IBCF, popular similarity measures are correlation and cosine.
+2. Identify the most similar users. The options are:
+
+Take account of the top k users (k-nearest_neighbors)
+Take account of the users whose similarity is above a defined threshold
+3. Rate the movies rated by the most similar users. The rating is the average rating among similar users and the approaches are:
+
+Average rating
+Weighted average rating, using the similarities as weights
+4. Pick the top-rated movies.
+
+# Building the recommendation system:
+
+Again, let's first check the default parameters of UBCF model. Here, nn is a number of similar users, and method is a similarity function, which is cosine by default. I build a recommender model leaving the parameters to their defaults and using the training set.
+```{r}
+recommender_models <- recommenderRegistry$get_entries(dataType ="realRatingMatrix")
+recommender_models$UBCF_realRatingMatrix$parameters
+recc_model <- Recommender(data = recc_data_train, method = "UBCF")
+recc_model
+model_details <- getModel(recc_model)
+#names(model_details)
+model_details$data
+```
+
+Applying the recommender model on the test set
+
+In the same way as the IBCF, I now determine the top ten recommendations for each new user in the test set.
+```{r}
+n_recommended <- 10
+recc_predicted <- predict(object = recc_model,
+                          newdata = recc_data_test, 
+                          n = n_recommended) 
+recc_predicted
+```
+
+# Explore results
+
+Let's take a look at the first four users:
+```{r}
+recc_matrix <- sapply(recc_predicted@items, 
+                      function(x){ as.integer(colnames(ratings_movies)[x]) })
+#dim(recc_matrix)
+recc_matrix[, 1:4]
+```
+I also compute how many times each movie got recommended and build the related frequency histogram:
+```{r}
+number_of_items <- factor(table(recc_matrix))
+
+chart_title <- "Distribution of the number of items for UBCF"
+qplot(number_of_items) + ggtitle(chart_title)
+```
+
+Compared with the IBCF, the distribution has a longer tail. This means that there are some movies that are recommended much more often than the others. The maximum is more than 30, compared to 10-ish for IBCF.
+
+Let's take a look at the top titles:
+```{r}
+number_of_items_sorted <- sort(number_of_items, decreasing = TRUE)
+number_of_items_top <- head(number_of_items_sorted, n = 4)
+table_top <- data.frame(as.integer(names(number_of_items_top)), number_of_items_top)
+
+for (i in 1:4){
+  table_top[i,1] <- as.character(subset(movies, 
+                                         movies$movieId == table_top[i,1])$title)
+}
+colnames(table_top) <- c("Movie title", "No of items")
+head(table_top)
+```
