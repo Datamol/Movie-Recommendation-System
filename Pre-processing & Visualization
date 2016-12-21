@@ -1,0 +1,252 @@
+---
+title: "Movielens Recommeder System"
+author: "Amol Jadhav"
+date: "November 6, 2016"
+output: html_document
+
+---
+# Source: http://grouplens.org/datasets/movielens/latest/
+# 100,000 ratings and 1,300 tag applications applied to 9,000 movies by 700 users. Last updated 10/2016
+```{r, echo=FALSE}
+# https://rpubs.com/jeknov/movieRec
+# https://github.com/jeknov/movieRec/blob/master/movieRec_descr.Rmd
+# Other R sites
+# https://rpubs.com/tarashnot/recommender_comparison
+# https://www.r-bloggers.com/recommender-systems-101-a-step-by-step-practical-example-in-r/
+```
+
+```{r}
+library(recommenderlab)
+library(ggplot2)
+library(data.table)
+library(reshape2)
+
+```
+
+## Getting and checking data
+
+
+```{r}
+movies <- read.csv(file.choose(), header=TRUE, stringsAsFactors=FALSE)
+ratings <- read.csv(file.choose())
+
+
+summary(movies)
+head(movies)
+
+summary(ratings)
+head(ratings)
+```
+
+## Data preprocessing
+
+# Extract list of genres
+
+```{r, echo=FALSE}
+
+genres <- as.data.frame(movies$genres, stringsAsFactors=FALSE)
+
+genres2 <- as.data.frame(tstrsplit(genres[,1], '[|]', 
+                                   type.convert=TRUE), 
+                         stringsAsFactors=FALSE)
+colnames(genres2) <- c(1:10)
+
+genre_list <- c("Action", "Adventure", "Animation", "Children", 
+                "Comedy", "Crime","Documentary", "Drama", "Fantasy",
+                "Film-Noir", "Horror", "Musical", "Mystery","Romance",
+                "Sci-Fi", "Thriller", "War", "Western") # we have 18 genres in total
+
+genre_matrix <- matrix(0,9126,18) #empty matrix, 9125=no of movies+1, 18=no of genres
+genre_matrix[1,] <- genre_list #set first row to genre list
+colnames(genre_matrix) <- genre_list #set column names to genre list
+
+#iterate through matrix
+for (i in 1:nrow(genres2)) {
+  for (c in 1:ncol(genres2)) {
+    genmat_col = which(genre_matrix[1,] == genres2[i,c])
+    genre_matrix[i+1,genmat_col] <- 1
+  }
+}
+
+#convert into dataframe
+genre_matrix2 <- as.data.frame(genre_matrix[-1,], stringsAsFactors=FALSE) #remove first row, which was the genre list
+for (c in 1:ncol(genre_matrix2)) {
+  genre_matrix2[,c] <- as.integer(genre_matrix2[,c])  #convert from characters to integers
+} 
+
+head(genre_matrix2)
+```
+
+
+# Creat a matrix to search for a movie by genre
+```{r}
+search_matrix <- cbind(movies[,1:2], genre_matrix2)
+head(search_matrix)
+```
+
+
+# Converting rating into a proper format
+
+In order to use the ratings data for building a recommendation engine with recommenderlab, I convert rating matrix into a sparse matrix #of type realRatingMatrix
+```{r echo=FALSE}
+#Create ratings matrix. Rows = userId, Columns = movieId
+ratingmat <- dcast(ratings, userId~movieId, value.var = "rating", na.rm=FALSE)
+ratingmat <- as.matrix(ratingmat[,-1]) #remove userIds
+
+#Convert rating matrix into a recommenderlab sparse matrix
+ratingmat <- as(ratingmat, "realRatingMatrix")
+ratingmat
+```
+
+#Exploring parameters of recommendation model
+```{r}
+recommender_models <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
+names(recommender_models)
+lapply(recommender_models, "[[", "description")
+
+# checking paramaters
+recommender_models$IBCF_realRatingMatrix$parameters
+recommender_models$UBCF_realRatingMatrix$parameters
+```
+
+# Exploring similarity data
+
+```{r}
+similarity_users <- similarity(ratingmat[1:4, ], 
+                               method = "cosine", 
+                               which = "users")
+as.matrix(similarity_users)
+image(as.matrix(similarity_users), main = "User similarity")
+
+# similarity between first 4 movies
+similarity_items <- similarity(ratingmat[, 1:4], method =
+                                 "cosine", which = "items")
+as.matrix(similarity_items)
+image(as.matrix(similarity_items), main = "Movies similarity")
+
+```
+
+# Further data exploration
+```{r}
+vector_ratings <- as.vector(ratingmat@data)
+unique(vector_ratings) # what are unique values of ratings
+
+table_ratings <- table(vector_ratings) # what is the count of each rating value
+table_ratings
+```
+
+# Distribution of the ratings
+```{r}
+vector_ratings <- vector_ratings[vector_ratings != 0] # rating == 0 are NA values
+vector_ratings <- factor(vector_ratings)
+
+qplot(vector_ratings) + 
+  ggtitle("Distribution of the ratings")
+```
+
+# Number of views of top movies
+```{r}
+views_per_movie <- colCounts(ratingmat) # count views for each movie
+
+table_views <- data.frame(movie = names(views_per_movie),
+                          views = views_per_movie) # create dataframe of views
+table_views <- table_views[order(table_views$views, 
+                                 decreasing = TRUE), ] # sort by number of views
+table_views$title <- NA
+for (i in 1:9066){table_views[i,3] <- as.character(subset(movies, movies$movieId == table_views[i,1])$title)}  ### Giving issues the rating matrix is 671 x 9066 rating matrix of class ‘realRatingMatrix’ so had to use that
+
+table_views[1:10,]
+
+ggplot(table_views[1:10, ], aes(x = title, y = views)) +
+  geom_bar(stat="identity") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+ggtitle("Number of views of the top movies")
+```
+
+# Distrbution of average movie rating
+
+```{r}
+average_ratings <- colMeans(ratingmat)
+
+qplot(average_ratings) + 
+  stat_bin(binwidth = 0.1) +
+  ggtitle("Distribution of the average movie rating")
+
+average_ratings_relevant <- average_ratings[views_per_movie > 50] 
+qplot(average_ratings_relevant) + 
+  stat_bin(binwidth = 0.1) +
+  ggtitle(paste("Distribution of the relevant average ratings"))
+
+```
+
+# Heat map of the rating matrix
+```{r}
+image(ratingmat, main = "Heatmap of the rating matrix") # hard to read-too many dimensions
+
+image(ratingmat[1:25, 1:50], main = "Heatmap of the first 20 rows and 25 columns")
+
+#Determine the minimum number of movies per user.
+min_n_movies <- quantile(rowCounts(ratingmat), 0.99)
+#Determine the minimum number of users per movie.
+min_n_users <- quantile(colCounts(ratingmat), 0.99)
+#Select the users and movies matching these criteria.
+print("Minimum number of movies per user:")
+min_n_movies
+print("Minimum number of users per movie:")
+min_n_users
+
+image(ratingmat[rowCounts(ratingmat) > min_n_movies,
+                 colCounts(ratingmat) > min_n_users], 
+main = "Heatmap of the top users and movies")
+```
+
+## Data Preparation
+
+# Select
+```{r}
+ratings_movies <- ratingmat[rowCounts(ratingmat) > 50,
+                             colCounts(ratingmat) > 50]
+ratings_movies
+# Top 3% users and movies in matrix
+min_movies <- quantile(rowCounts(ratings_movies), 0.97)
+min_users <- quantile(colCounts(ratings_movies), 0.97)
+image(ratings_movies[rowCounts(ratings_movies) > min_movies,
+                     colCounts(ratings_movies) > min_users], 
+main = "Heatmap of the top users and movies")
+
+average_ratings_per_user <- rowMeans(ratings_movies)
+qplot(average_ratings_per_user) + stat_bin(binwidth = 0.1) +
+  ggtitle("Distribution of the average rating per user")
+```
+
+# normalizing data
+```{r}
+ratings_movies_norm <- normalize(ratings_movies)
+sum(rowMeans(ratings_movies_norm) > 0.00001)
+
+# normalized matrix for top movies
+image(ratings_movies_norm[rowCounts(ratings_movies_norm) > min_movies,
+                          colCounts(ratings_movies_norm) > min_users], 
+main = "Heatmap of the top users and movies")
+```
+
+# Binarization of data
+```{r}
+# Option 1: Define a matrix having 1 if the user rated the movie, and 0 otherwise. In this case, the information about the rating is lost
+# 1st option: define a matrix equal to 1 if the movie has been watched
+
+ratings_movies_watched <- binarize(ratings_movies, minRating = 1)
+min_movies_binary <- quantile(rowCounts(ratings_movies), 0.95)
+min_users_binary <- quantile(colCounts(ratings_movies), 0.95)
+image(ratings_movies_watched[rowCounts(ratings_movies) > min_movies_binary,
+                             colCounts(ratings_movies) > min_users_binary], 
+main = "Heatmap of the top users and movies")
+
+# Define a matrix having 1 if the rating is above or equal to a definite threshold (for example, 3), and 0 otherwise. In this case, giving a bad rating to a movie is equivalent to not having rated it
+# 2nd option: define a matrix equal to 1 if the cell has a rating above the threshold
+
+ratings_movies_good <- binarize(ratings_movies, minRating = 3)
+image(ratings_movies_good[rowCounts(ratings_movies) > min_movies_binary, 
+colCounts(ratings_movies) > min_users_binary], 
+main = "Heatmap of the top users and movies")
+```
