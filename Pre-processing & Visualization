@@ -8,11 +8,6 @@ output: html_document
 # Source: http://grouplens.org/datasets/movielens/latest/
 # 100,000 ratings and 1,300 tag applications applied to 9,000 movies by 700 users. Last updated 10/2016
 ```{r, echo=FALSE}
-# https://rpubs.com/jeknov/movieRec
-# https://github.com/jeknov/movieRec/blob/master/movieRec_descr.Rmd
-# Other R sites
-# https://rpubs.com/tarashnot/recommender_comparison
-# https://www.r-bloggers.com/recommender-systems-101-a-step-by-step-practical-example-in-r/
 ```
 
 ```{r}
